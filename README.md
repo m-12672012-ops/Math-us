@@ -1,2 +1,440 @@
 # Math-us
 Polygon mathematic game
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Among Us: Polygon Edition</title>
+
+<script src="https://cdn.jsdelivr.net/npm/phaser@3.86.0/dist/phaser.min.js"></script>
+
+<style>
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        margin: 0;
+        background: #080e18;
+        overflow: hidden;
+        font-family: Arial, sans-serif;
+    }
+
+    canvas {
+        display: block;
+        margin: auto;
+        touch-action: none;
+    }
+</style>
+</head>
+
+<body>
+
+<script>
+
+class GameScene extends Phaser.Scene {
+
+    constructor() {
+        super('GameScene');
+        this.completed = 0;
+        this.taskOpen = false;
+        this.destination = null;
+        this.nearbyStation = null;
+    }
+
+    create() {
+
+        // SPACESHIP BACKGROUND
+        this.add.rectangle(450, 300, 900, 600, 0x101827);
+        this.add.rectangle(450, 300, 850, 550, 0x344253);
+
+        // ROOMS
+        const rooms = [
+            [220, 190, 240, 170, 'CAFETERIA'],
+            [680, 190, 240, 170, 'NAVIGATION'],
+            [220, 450, 240, 170, 'STORAGE'],
+            [680, 450, 240, 170, 'ELECTRICAL']
+        ];
+
+        rooms.forEach(([x, y, w, h, name]) => {
+
+            this.add.rectangle(x, y, w, h, 0x526477)
+                .setStrokeStyle(5, 0x172638);
+
+            this.add.text(x, y - 55, name, {
+                fontSize: '17px',
+                color: '#ffffff',
+                fontStyle: 'bold'
+            }).setOrigin(0.5);
+        });
+
+        // CREATE CREWMATE
+        const graphics = this.make.graphics({ add: false });
+
+        graphics.fillStyle(0xd92935);
+        graphics.fillRoundedRect(8, 15, 48, 55, 19);
+
+        graphics.fillStyle(0x9deaff);
+        graphics.fillRoundedRect(30, 25, 34, 21, 10);
+
+        graphics.lineStyle(3, 0x8b111c);
+        graphics.strokeRoundedRect(8, 15, 48, 55, 19);
+
+        graphics.generateTexture('redPlayer', 75, 85);
+        graphics.destroy();
+
+        this.player = this.physics.add.sprite(
+            450, 300, 'redPlayer'
+        );
+
+        this.player.setCollideWorldBounds(true);
+        this.player.setDepth(5);
+
+        // POLYGON STATIONS
+        this.stations = [
+            {
+                x: 220, y: 190,
+                name: 'Triangle',
+                sides: 3
+            },
+            {
+                x: 680, y: 190,
+                name: 'Square',
+                sides: 4
+            },
+            {
+                x: 220, y: 450,
+                name: 'Pentagon',
+                sides: 5
+            },
+            {
+                x: 680, y: 450,
+                name: 'Hexagon',
+                sides: 6
+            }
+        ];
+
+        this.stations.forEach(station => {
+
+            const shape = this.add.graphics();
+
+            shape.fillStyle(0xf2c94c);
+            shape.lineStyle(3, 0xffffff);
+
+            shape.fillPoints(
+                Phaser.Geom.Polygon.Earcut(
+                    Array.from({length: station.sides}, (_, i) => {
+                        const angle = (i * Math.PI * 2 / station.sides) - Math.PI / 2;
+                        return [
+                            station.x + Math.cos(angle) * 23,
+                            station.y + Math.sin(angle) * 23
+                        ];
+                    }).flat()
+                ).length ? Array.from({length: station.sides}, (_, i) => {
+                    const angle = (i * Math.PI * 2 / station.sides) - Math.PI / 2;
+                    return new Phaser.Math.Vector2(
+                        station.x + Math.cos(angle) * 23,
+                        station.y + Math.sin(angle) * 23
+                    );
+                }) : [], true);
+
+            shape.strokePoints(
+                Array.from({length: station.sides}, (_, i) => {
+                    const angle = (i * Math.PI * 2 / station.sides) - Math.PI / 2;
+                    return new Phaser.Math.Vector2(
+                        station.x + Math.cos(angle) * 23,
+                        station.y + Math.sin(angle) * 23
+                    );
+                }), true
+            );
+
+            this.add.text(
+                station.x, station.y + 42,
+                'TASK',
+                {
+                    fontSize: '13px',
+                    color: '#ffffff',
+                    fontStyle: 'bold'
+                }
+            ).setOrigin(0.5);
+        });
+
+        // TASK PROGRESS
+        this.progressText = this.add.text(
+            20, 20, 'TASKS: 0/4',
+            {
+                fontSize: '20px',
+                color: '#ffffff',
+                fontStyle: 'bold'
+            }
+        );
+
+        // INSTRUCTIONS
+        this.info = this.add.text(
+            450, 565,
+            'TAP THE FLOOR TO MOVE',
+            {
+                fontSize: '16px',
+                color: '#ffffff',
+                backgroundColor: '#172638',
+                padding: 8
+            }
+        ).setOrigin(0.5);
+
+        // INTERACTION BUTTON
+        this.interactButton = this.add.text(
+            450, 500, 'INTERACT',
+            {
+                fontSize: '19px',
+                color: '#ffffff',
+                backgroundColor: '#16844a',
+                padding: {x: 20, y: 12}
+            }
+        ).setOrigin(0.5).setInteractive();
+
+        this.interactButton.setVisible(false);
+
+        this.interactButton.on('pointerdown', () => {
+            if (this.nearbyStation) {
+                this.openTask(this.nearbyStation);
+            }
+        });
+
+        // TOUCH MOVEMENT
+        this.input.on('pointerdown', pointer => {
+
+            if (this.taskOpen) return;
+
+            if (this.interactButton.visible &&
+                Phaser.Geom.Rectangle.Contains(
+                    this.interactButton.getBounds(),
+                    pointer.x, pointer.y
+                )) return;
+
+            this.destination = {
+                x: pointer.worldX,
+                y: pointer.worldY
+            };
+        });
+    }
+
+    update() {
+
+        if (this.taskOpen) {
+            this.player.setVelocity(0);
+            return;
+        }
+
+        // MOVE PLAYER TOWARDS TOUCH LOCATION
+        if (this.destination) {
+
+            const distance = Phaser.Math.Distance.Between(
+                this.player.x,
+                this.player.y,
+                this.destination.x,
+                this.destination.y
+            );
+
+            if (distance > 8) {
+                this.physics.moveToObject(
+                    this.player,
+                    this.destination,
+                    170
+                );
+            } else {
+                this.player.setVelocity(0);
+                this.destination = null;
+            }
+        } else {
+            this.player.setVelocity(0);
+        }
+
+        // CHECK NEARBY TASK
+        this.nearbyStation = this.stations.find(station => {
+
+            const distance = Phaser.Math.Distance.Between(
+                this.player.x,
+                this.player.y,
+                station.x,
+                station.y
+            );
+
+            return distance < 75;
+        });
+
+        this.interactButton.setVisible(
+            Boolean(this.nearbyStation)
+        );
+
+        this.info.setText(
+            this.nearbyStation
+                ? 'Tap INTERACT to complete your task'
+                : 'Tap the floor to move around'
+        );
+    }
+
+    openTask(station) {
+
+        if (this.taskOpen) return;
+
+        this.taskOpen = true;
+        this.player.setVelocity(0);
+
+        this.panel = [];
+
+        const add = object => {
+            this.panel.push(object);
+            return object;
+        };
+
+        // TASK WINDOW
+        add(this.add.rectangle(
+            450, 300, 490, 340, 0x101827
+        ).setStrokeStyle(4, 0x65b5df));
+
+        add(this.add.text(
+            450, 175,
+            'POLYGON MATHEMATICS',
+            {
+                fontSize: '25px',
+                color: '#ffffff',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0.5));
+
+        add(this.add.text(
+            450, 235,
+            `How many sides does a ${station.name} have?`,
+            {
+                fontSize: '19px',
+                color: '#ffffff',
+                align: 'center'
+            }
+        ).setOrigin(0.5));
+
+        const answers = [
+            station.sides - 1,
+            station.sides,
+            station.sides + 1
+        ];
+
+        answers.forEach((answer, index) => {
+
+            const x = 300 + index * 150;
+
+            const button = add(this.add.rectangle(
+                x, 330, 110, 65, 0x315c7a
+            ).setInteractive());
+
+            add(this.add.text(
+                x, 330, String(answer),
+                {
+                    fontSize: '27px',
+                    color: '#ffffff'
+                }
+            ).setOrigin(0.5));
+
+            button.on('pointerdown', () => {
+
+                if (answer === station.sides) {
+
+                    this.completed++;
+
+                    this.progressText.setText(
+                        `TASKS: ${this.completed}/4`
+                    );
+
+                    this.closeTask();
+
+                    if (this.completed === 4) {
+                        this.showVictory();
+                    }
+
+                } else {
+
+                    this.add.text(
+                        450, 410,
+                        'INCORRECT! TRY AGAIN.',
+                        {
+                            fontSize: '18px',
+                            color: '#ff7777'
+                        }
+                    ).setOrigin(0.5);
+
+                }
+            });
+        });
+
+        const close = add(this.add.text(
+            450, 430, 'CLOSE',
+            {
+                fontSize: '18px',
+                color: '#ff7777'
+            }
+        ).setOrigin(0.5).setInteractive());
+
+        close.on('pointerdown', () => this.closeTask());
+    }
+
+    closeTask() {
+
+        this.panel.forEach(object => object.destroy());
+        this.panel = [];
+        this.taskOpen = false;
+    }
+
+    showVictory() {
+
+        this.add.rectangle(
+            450, 300, 500, 250, 0x101827
+        ).setStrokeStyle(4, 0x44dd88);
+
+        this.add.text(
+            450, 270,
+            'CREWMATES WIN!',
+            {
+                fontSize: '38px',
+                color: '#44dd88',
+                fontStyle: 'bold'
+            }
+        ).setOrigin(0.5);
+
+        this.add.text(
+            450, 330,
+            'All polygon tasks completed!',
+            {
+                fontSize: '19px',
+                color: '#ffffff'
+            }
+        ).setOrigin(0.5);
+    }
+}
+
+const config = {
+    type: Phaser.AUTO,
+    width: 900,
+    height: 600,
+    backgroundColor: '#101827',
+
+    scale: {
+        mode: Phaser.Scale.FIT,
+        autoCenter: Phaser.Scale.CENTER_BOTH
+    },
+
+    physics: {
+        default: 'arcade',
+        arcade: {
+            debug: false
+        }
+    },
+
+    scene: GameScene
+};
+
+new Phaser.Game(config);
+
+</script>
+</body>
+</html>
